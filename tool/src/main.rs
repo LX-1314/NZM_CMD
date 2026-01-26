@@ -3,96 +3,122 @@
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use screenshots::Screen;
 use std::fs;
+use std::time::Instant;
 
 // ==========================================
-// 1. 数据结构 (与你的导航引擎完全匹配)
+// 1. 数据结构 (Data Structures)
 // ==========================================
 #[derive(Clone, PartialEq)]
+enum RecognitionLogic { AND, OR }
+
+#[derive(Clone, PartialEq)]
 enum ElementKind {
-    Anchor,
-    Button { target: String },
+    TextAnchor { text: String },
+    ColorAnchor { color_hex: String, tolerance: u8 },
+    Button { target: String, post_delay: u32 },
 }
 
 #[derive(Clone)]
 struct UIElementDraft {
-    rect: Rect,        // 界面上的像素矩形
-    ocr_text: String,  // 识别到的文字
+    pos_or_rect: Rect,
     kind: ElementKind,
 }
 
 // ==========================================
-// 2. 编辑器状态
+// 2. 编辑器核心状态 (App State)
 // ==========================================
 struct MapBuilderTool {
     texture: Option<egui::TextureHandle>,
-    img_size: Vec2,         // 原始图片的尺寸
+    raw_image: Option<image::RgbaImage>, 
+    img_size: Vec2,
     scene_id: String,
     scene_name: String,
+    logic: RecognitionLogic,
     
-    // 交互
     start_pos: Option<Pos2>,
     current_rect: Option<Rect>,
+    is_color_picker_mode: bool,
     
-    // 数据
+    capture_timer: Option<Instant>, 
+
     drafts: Vec<UIElementDraft>,
     toml_output: String,
 }
 
 impl MapBuilderTool {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        setup_custom_fonts(&cc.egui_ctx); // 加载微软雅黑
+
         Self {
             texture: None,
+            raw_image: None,
             img_size: Vec2::ZERO,
-            scene_id: "lobby".into(),
-            scene_name: "游戏大厅".into(),
+            scene_id: "lobby_01".into(),
+            scene_name: "游戏主界面".into(),
+            logic: RecognitionLogic::AND,
             start_pos: None,
             current_rect: None,
+            is_color_picker_mode: false,
+            capture_timer: None,
             drafts: Vec::new(),
             toml_output: String::new(),
         }
     }
 
-    fn capture(&mut self, ctx: &egui::Context) {
-        let screen = Screen::all().unwrap()[0];
-        if let Ok(image) = screen.capture() {
-            self.img_size = Vec2::new(image.width() as f32, image.height() as f32);
-            let pixels = image.to_rgba8();
-            let color_img = egui::ColorImage::from_rgba_unmultiplied(
-                [image.width() as usize, image.height() as usize], 
-                pixels.as_flat_samples().as_slice()
-            );
-            self.texture = Some(ctx.load_texture("shot", color_img, Default::default()));
+    fn capture_immediate(&mut self, ctx: &egui::Context) {
+        let screens = Screen::all().unwrap();
+        if let Some(screen) = screens.first() {
+            if let Ok(image) = screen.capture() {
+                self.img_size = Vec2::new(image.width() as f32, image.height() as f32);
+                self.raw_image = Some(image.clone()); 
+                let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width() as usize, image.height() as usize], 
+                    image.as_flat_samples().as_slice()
+                );
+                self.texture = Some(ctx.load_texture("shot", color_img, Default::default()));
+            }
         }
     }
 
-    // 🔥 建议：在这里调用你的 OCR 模块
-    fn do_ocr(&self, _rect: Rect) -> String {
-        // 实际开发中：
-        // 1. 根据 _rect 从原始图片 buffer 中 crop 出一块
-        // 2. 传给 PaddleOCR (ONNX) 识别
-        // 3. 返回识别出的字符串
-        "识别到的中文".to_string() 
+    fn pick_color(&self, p: Pos2) -> String {
+        if let Some(img) = &self.raw_image {
+            let x = p.x as u32;
+            let y = p.y as u32;
+            if x < img.width() && y < img.height() {
+                let pixel = img.get_pixel(x, y);
+                return format!("#{:02X}{:02X}{:02X}", pixel[0], pixel[1], pixel[2]);
+            }
+        }
+        "#FFFFFF".into()
     }
 
     fn build_toml(&mut self) {
-        let mut toml = format!("# 场景定义：{}\n[[scenes]]\nid = \"{}\"\nname = \"{}\"\n", 
-                                self.scene_name, self.scene_id, self.scene_name);
+        let logic_str = if self.logic == RecognitionLogic::AND { "and" } else { "or" };
+        let mut toml = format!("[[scenes]]\nid = \"{}\"\nname = \"{}\"\nlogic = \"{}\"\n\n", 
+                                self.scene_id, self.scene_name, logic_str);
         
-        // 生成锚点
-        toml.push_str("anchors = [\n");
-        for d in self.drafts.iter().filter(|d| matches!(d.kind, ElementKind::Anchor)) {
-            toml.push_str(&format!("    {{ rect = [{}, {}, {}, {}], text = \"{}\" }},\n",
-                d.rect.min.x as i32, d.rect.min.y as i32, d.rect.max.x as i32, d.rect.max.y as i32, d.ocr_text));
+        toml.push_str("# --- 识别特征 ---\n");
+        for d in &self.drafts {
+            match &d.kind {
+                ElementKind::TextAnchor { text } => {
+                    toml.push_str(&format!("anchors.text = {{ rect = [{}, {}, {}, {}], val = \"{}\" }}\n",
+                        d.pos_or_rect.min.x as i32, d.pos_or_rect.min.y as i32, d.pos_or_rect.max.x as i32, d.pos_or_rect.max.y as i32, text));
+                }
+                ElementKind::ColorAnchor { color_hex, tolerance } => {
+                    toml.push_str(&format!("anchors.color = {{ pos = [{}, {}], val = \"{}\", tol = {} }}\n",
+                        d.pos_or_rect.min.x as i32, d.pos_or_rect.min.y as i32, color_hex, tolerance));
+                }
+                _ => {}
+            }
         }
-        toml.push_str("]\n\n");
 
-        // 生成跳转关系
-        for d in self.drafts.iter().filter(|d| matches!(d.kind, ElementKind::Button{..})) {
-            if let ElementKind::Button { target } = &d.kind {
+        toml.push_str("\n# --- 跳转动作 ---\n");
+        for d in &self.drafts {
+            if let ElementKind::Button { target, post_delay } = &d.kind {
                 toml.push_str("[[scenes.transitions]]\n");
                 toml.push_str(&format!("target = \"{}\"\n", target));
-                toml.push_str(&format!("trigger_btn = [{}, {}]\n", d.rect.center().x as i32, d.rect.center().y as i32));
-                toml.push_str("action = \"Click\"\n\n");
+                toml.push_str(&format!("coords = [{}, {}]\n", d.pos_or_rect.center().x as i32, d.pos_or_rect.center().y as i32));
+                toml.push_str(&format!("post_delay = {}\n\n", post_delay));
             }
         }
         self.toml_output = toml;
@@ -100,50 +126,105 @@ impl MapBuilderTool {
 }
 
 // ==========================================
-// 3. GUI 交互逻辑
+// 3. 字体加载配置 (解决中文乱码)
+// ==========================================
+fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    if let Ok(data) = fs::read("C:\\Windows\\Fonts\\msyh.ttc") {
+        fonts.font_data.insert("msyh".to_owned(), egui::FontData::from_owned(data));
+        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "msyh".to_owned());
+        fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "msyh".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
+
+// ==========================================
+// 4. GUI 渲染与交互 (包含 ID 修复)
 // ==========================================
 impl eframe::App for MapBuilderTool {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 左侧面板：控制与数据展示
-        egui::SidePanel::left("side").min_width(320.0).show(ctx, |ui| {
-            ui.heading("🎯 MINKE UI 建模工具");
+        if let Some(start_time) = self.capture_timer {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            if elapsed >= 3.0 {
+                self.capture_immediate(ctx);
+                self.capture_timer = None; 
+                self.drafts.clear(); 
+                self.current_rect = None;
+            } else {
+                ctx.request_repaint(); 
+            }
+        }
+
+        egui::SidePanel::left("side").min_width(350.0).show(ctx, |ui| {
+            ui.heading("🚀 MINKE UI 自动化建模器");
             ui.add_space(10.0);
             
-            if ui.button("📸 截取屏幕").clicked() { self.capture(ctx); }
-            
+            ui.group(|ui| {
+                if self.capture_timer.is_some() {
+                    let remaining = 3.0 - self.capture_timer.unwrap().elapsed().as_secs_f32();
+                    ui.add(egui::ProgressBar::new(remaining / 3.0)
+                        .text(format!("倒计时识别：{:.1}秒", remaining)));
+                } else {
+                    if ui.button("📸 3秒延时截图").clicked() {
+                        self.capture_timer = Some(Instant::now());
+                    }
+                }
+            });
+
             ui.separator();
             ui.horizontal(|ui| { ui.label("场景ID:"); ui.text_edit_singleline(&mut self.scene_id); });
             ui.horizontal(|ui| { ui.label("名称:"); ui.text_edit_singleline(&mut self.scene_name); });
+            ui.horizontal(|ui| { 
+                ui.label("场景判定:"); 
+                ui.radio_value(&mut self.logic, RecognitionLogic::AND, "AND"); 
+                ui.radio_value(&mut self.logic, RecognitionLogic::OR, "OR"); 
+            });
 
             ui.separator();
+            ui.checkbox(&mut self.is_color_picker_mode, "开启取色模式 (吸管)");
+
             if let Some(rect) = self.current_rect {
                 ui.group(|ui| {
-                    ui.label(RichText::new("已选中元素").color(Color32::YELLOW));
-                    ui.label(format!("坐标: [{}, {}, {}, {}]", rect.min.x as i32, rect.min.y as i32, rect.max.x as i32, rect.max.y as i32));
-                    
-                    if ui.button("⚓ 添加为锚点 (用于定位)").clicked() {
-                        let text = self.do_ocr(rect);
-                        self.drafts.push(UIElementDraft { rect, ocr_text: text, kind: ElementKind::Anchor });
-                        self.current_rect = None;
-                    }
-                    if ui.button("🔄 添加为跳转 (点击切换)").clicked() {
-                        let text = self.do_ocr(rect);
-                        self.drafts.push(UIElementDraft { rect, ocr_text: text, kind: ElementKind::Button { target: "next_scene".into() } });
-                        self.current_rect = None;
+                    // 颜色优化：将原先的金黄色改为青色 (Cyan)，对比度更高
+                    // ui.label(RichText::new("已选中目标：").color(Color32::CYAN).strong());
+                    ui.label(RichText::new("已选中目标：").color(Color32::from_rgb(0, 255, 255)).strong());
+                    if self.is_color_picker_mode {
+                        let color = self.pick_color(rect.min);
+                        ui.label(format!("像素颜色: {}", color));
+                        if ui.button("添加为颜色锚点").clicked() {
+                            self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::ColorAnchor { color_hex: color, tolerance: 15 } });
+                            self.current_rect = None;
+                        }
+                    } else {
+                        if ui.button("添加为 OCR 锚点").clicked() {
+                            self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::TextAnchor { text: "输入文本".into() } });
+                            self.current_rect = None;
+                        }
+                        if ui.button("添加为跳转按钮").clicked() {
+                            self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::Button { target: "next_id".into(), post_delay: 500 } });
+                            self.current_rect = None;
+                        }
                     }
                 });
             }
 
             ui.separator();
-            ui.label("当前场景元素列表:");
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+            ui.label("元素池:");
+            // 修复点：通过 id_source 显式指定 ID，解决界面上的红色警告
+            egui::ScrollArea::vertical().id_source("list_scroll").max_height(250.0).show(ui, |ui| {
                 let mut del = None;
                 for (i, d) in self.drafts.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        let icon = if matches!(d.kind, ElementKind::Anchor) { "⚓" } else { "🖱️" };
-                        ui.label(format!("{} {}", icon, d.ocr_text));
-                        if let ElementKind::Button { target } = &mut d.kind {
-                            ui.text_edit_singleline(target);
+                        match &mut d.kind {
+                            ElementKind::TextAnchor { text } => { ui.label("⚓"); ui.text_edit_singleline(text); }
+                            ElementKind::ColorAnchor { color_hex, tolerance } => {
+                                ui.label("🧪"); ui.label(color_hex.as_str());
+                                ui.add(egui::DragValue::new(tolerance).clamp_range(0..=100).prefix("T:"));
+                            }
+                            ElementKind::Button { target, post_delay } => {
+                                ui.label("🖱️"); ui.text_edit_singleline(target);
+                                ui.add(egui::DragValue::new(post_delay).speed(10).prefix("ms:"));
+                            }
                         }
                         if ui.button("❌").clicked() { del = Some(i); }
                     });
@@ -152,69 +233,60 @@ impl eframe::App for MapBuilderTool {
             });
 
             ui.separator();
-            if ui.button("💾 生成 TOML 块").clicked() { self.build_toml(); }
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.text_edit_multiline(&mut self.toml_output);
+            if ui.button("💾 生成 TOML").clicked() { self.build_toml(); }
+            // 修复点：第二个滚动区域也需要唯一的 ID
+            egui::ScrollArea::vertical().id_source("toml_scroll").show(ui, |ui| {
+                ui.add(egui::TextEdit::multiline(&mut self.toml_output)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(f32::INFINITY));
             });
         });
 
-        // 中央面板：可视化操作区
         egui::CentralPanel::default().show(ctx, |ui| {
-            // 获取画布的实际显示区域
             let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::drag());
-            
             if let Some(tex) = &self.texture {
-                // 计算底图在画布中的显示位置（保持原始比例）
                 let painter_size = resp.rect.size();
                 let scale = (painter_size.x / self.img_size.x).min(painter_size.y / self.img_size.y);
                 let draw_size = self.img_size * scale;
                 let draw_rect = Rect::from_min_size(resp.rect.min, draw_size);
-
                 painter.image(tex.id(), draw_rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
 
-                // --- 交互转换逻辑 ---
                 let to_screen = |p: Pos2| draw_rect.min + (p.to_vec2() * scale);
-                let from_screen = |p: Pos2| (p - draw_rect.min) / scale;
+                let from_screen = |p: Pos2| {
+                    let v = (p - draw_rect.min) / scale;
+                    Pos2::new(v.x, v.y)
+                };
 
-                // 绘制已保存元素
                 for d in &self.drafts {
-                    let color = if matches!(d.kind, ElementKind::Anchor) { Color32::GREEN } else { Color32::BLUE };
-                    let screen_rect = Rect::from_min_max(to_screen(d.rect.min), to_screen(d.rect.max));
-                    painter.rect_stroke(screen_rect, 2.0, Stroke::new(2.0, color));
+                    let color = match d.kind {
+                        ElementKind::TextAnchor{..} => Color32::GREEN,
+                        ElementKind::ColorAnchor{..} => Color32::from_rgb(255, 165, 0),
+                        ElementKind::Button{..} => Color32::BLUE,
+                    };
+                    painter.rect_stroke(Rect::from_min_max(to_screen(d.pos_or_rect.min), to_screen(d.pos_or_rect.max)), 2.0, Stroke::new(2.0, color));
                 }
 
-                // 处理拖拽
-                if resp.drag_started() { self.start_pos = resp.interact_pointer_pos().map(from_screen); }
+                if resp.drag_started() {
+                    if let Some(p) = resp.interact_pointer_pos() { self.start_pos = Some(from_screen(p)); }
+                }
                 if let (Some(start), Some(curr_raw)) = (self.start_pos, resp.interact_pointer_pos()) {
                     let curr = from_screen(curr_raw);
-                    let rect = Rect::from_two_pos(start, curr);
-                    
-                    // 绘制正在拖拽的框
-                    let preview_rect = Rect::from_min_max(to_screen(rect.min), to_screen(rect.max));
-                    painter.rect_stroke(preview_rect, 0.0, Stroke::new(1.5, Color32::RED));
-
-                    if resp.drag_released() {
-                        self.current_rect = Some(rect);
-                        self.start_pos = None;
-                    }
+                    let rect = if self.is_color_picker_mode {
+                        Rect::from_min_max(curr, curr + Vec2::splat(1.0))
+                    } else {
+                        Rect::from_two_pos(start, curr)
+                    };
+                    painter.rect_stroke(Rect::from_min_max(to_screen(rect.min), to_screen(rect.max)), 0.0, Stroke::new(1.5, Color32::RED));
+                    if resp.drag_released() { self.current_rect = Some(rect); self.start_pos = None; }
                 }
             } else {
-                ui.centered_and_justified(|ui| ui.label("点击左侧『截取屏幕』开始工作"));
+                ui.centered_and_justified(|ui| ui.label("点击左侧『3秒延时截图』开始建模"));
             }
         });
     }
 }
 
 fn main() -> eframe::Result<()> {
-    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]), ..Default::default() };
-    eframe::run_native("MINKE UI Mapper", opts, Box::new(|cc| {
-        // 加载中文字体，确保侧边栏显示正常
-        let mut fonts = egui::FontDefinitions::default();
-        if let Ok(data) = fs::read("C:\\Windows\\Fonts\\msyh.ttc") { // 微软雅黑
-            fonts.font_data.insert("my_font".to_owned(), egui::FontData::from_owned(data));
-            fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "my_font".to_owned());
-        }
-        cc.egui_ctx.set_fonts(fonts);
-        Box::new(MapBuilderTool::new(cc))
-    }))
+    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]), ..Default::default() };
+    eframe::run_native("MINKE UI Mapper Pro", opts, Box::new(|cc| Box::new(MapBuilderTool::new(cc))))
 }

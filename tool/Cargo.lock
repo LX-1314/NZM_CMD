@@ -2803,6 +2803,7 @@ dependencies = [
  "screenshots",
  "serde",
  "toml",
+ "winapi",
 ]
 
 [[package]]

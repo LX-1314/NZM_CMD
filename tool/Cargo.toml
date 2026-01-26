@@ -11,3 +11,4 @@ toml = "0.8"
 image = "0.24"
 # 如果要接入真实 OCR，请添加：
 # ort = "1.15"
+winapi = { version = "0.3.9", features = ["winuser", "windef", "winbase"] }
