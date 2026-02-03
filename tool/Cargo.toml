@@ -12,3 +12,13 @@ image = "0.24"
 # 如果要接入真实 OCR，请添加：
 # ort = "1.15"
 winapi = { version = "0.3.9", features = ["winuser", "windef", "winbase"] }
+[dependencies.windows]
+version = "0.52" # 请确保版本与 nav.rs 中使用的一致
+features = [
+    "Media_Ocr",
+    "Globalization",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    "Foundation",
+    "Foundation_Collections", # 🔥 必须加上这个才能支持 Lines 的循环遍历
+]

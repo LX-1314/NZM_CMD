@@ -120,6 +120,166 @@
       "height": 2,
       "wave_num": 1,
       "is_late": false
+    },
+    {
+      "uid": 1017,
+      "name": "修理站",
+      "grid_x": 34,
+      "grid_y": 56,
+      "width": 2,
+      "height": 2,
+      "wave_num": 1,
+      "is_late": true
+    },
+    {
+      "uid": 1018,
+      "name": "修理站",
+      "grid_x": 44,
+      "grid_y": 56,
+      "width": 2,
+      "height": 2,
+      "wave_num": 1,
+      "is_late": true
+    },
+    {
+      "uid": 1019,
+      "name": "修理站",
+      "grid_x": 30,
+      "grid_y": 56,
+      "width": 2,
+      "height": 2,
+      "wave_num": 2,
+      "is_late": true
+    },
+    {
+      "uid": 1020,
+      "name": "修理站",
+      "grid_x": 32,
+      "grid_y": 56,
+      "width": 2,
+      "height": 2,
+      "wave_num": 2,
+      "is_late": false
+    },
+    {
+      "uid": 1021,
+      "name": "修理站",
+      "grid_x": 46,
+      "grid_y": 56,
+      "width": 2,
+      "height": 2,
+      "wave_num": 2,
+      "is_late": false
+    },
+    {
+      "uid": 1022,
+      "name": "修理站",
+      "grid_x": 48,
+      "grid_y": 56,
+      "width": 2,
+      "height": 2,
+      "wave_num": 2,
+      "is_late": false
+    },
+    {
+      "uid": 1023,
+      "name": "修理站",
+      "grid_x": 31,
+      "grid_y": 28,
+      "width": 2,
+      "height": 2,
+      "wave_num": 2,
+      "is_late": false
+    },
+    {
+      "uid": 1024,
+      "name": "修理站",
+      "grid_x": 47,
+      "grid_y": 28,
+      "width": 2,
+      "height": 2,
+      "wave_num": 2,
+      "is_late": false
+    },
+    {
+      "uid": 1025,
+      "name": "修理站",
+      "grid_x": 28,
+      "grid_y": 58,
+      "width": 2,
+      "height": 2,
+      "wave_num": 3,
+      "is_late": false
+    },
+    {
+      "uid": 1026,
+      "name": "修理站",
+      "grid_x": 44,
+      "grid_y": 58,
+      "width": 2,
+      "height": 2,
+      "wave_num": 3,
+      "is_late": false
+    },
+    {
+      "uid": 1027,
+      "name": "修理站",
+      "grid_x": 50,
+      "grid_y": 58,
+      "width": 2,
+      "height": 2,
+      "wave_num": 3,
+      "is_late": false
+    },
+    {
+      "uid": 1028,
+      "name": "修理站",
+      "grid_x": 34,
+      "grid_y": 58,
+      "width": 2,
+      "height": 2,
+      "wave_num": 3,
+      "is_late": false
+    },
+    {
+      "uid": 1029,
+      "name": "修理站",
+      "grid_x": 30,
+      "grid_y": 58,
+      "width": 2,
+      "height": 2,
+      "wave_num": 4,
+      "is_late": false
+    },
+    {
+      "uid": 1030,
+      "name": "修理站",
+      "grid_x": 32,
+      "grid_y": 58,
+      "width": 2,
+      "height": 2,
+      "wave_num": 4,
+      "is_late": false
+    },
+    {
+      "uid": 1031,
+      "name": "修理站",
+      "grid_x": 34,
+      "grid_y": 48,
+      "width": 2,
+      "height": 2,
+      "wave_num": 4,
+      "is_late": false
+    },
+    {
+      "uid": 1032,
+      "name": "修理站",
+      "grid_x": 32,
+      "grid_y": 48,
+      "width": 2,
+      "height": 2,
+      "wave_num": 4,
+      "is_late": false
     }
   ],
   "upgrades": [],

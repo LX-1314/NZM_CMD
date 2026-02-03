@@ -2,12 +2,18 @@
 
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use screenshots::Screen;
-use serde::Deserialize; // 导入反序列化特性
+use serde::Deserialize;
 use std::fs;
 use std::time::Instant;
 
+// OCR 所需的引用
+use std::io::Cursor;
+use windows::Media::Ocr::{OcrEngine, OcrResult}; 
+use windows::Graphics::Imaging::BitmapDecoder;
+use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
+
 // ==========================================
-// 1. 编辑器内部数据结构
+// 1. 数据结构
 // ==========================================
 #[derive(Clone, PartialEq)]
 enum RecognitionLogic { AND, OR }
@@ -25,83 +31,59 @@ struct UIElementDraft {
     kind: ElementKind,
 }
 
-// ==========================================
-// 2. TOML 序列化/反序列化 结构体 (用于导入)
-// ==========================================
-// 这些结构体专门用于映射 TOML 文件格式
-
 #[derive(Deserialize)]
-struct TomlRoot {
-    scenes: Vec<TomlScene>,
-}
-
+struct TomlRoot { scenes: Vec<TomlScene> }
 #[derive(Deserialize)]
-struct TomlScene {
-    id: String,
-    name: String,
-    logic: String,
-    anchors: Option<TomlAnchors>,
-    transitions: Option<Vec<TomlTransition>>,
-}
-
+struct TomlScene { id: String, name: String, logic: String, anchors: Option<TomlAnchors>, transitions: Option<Vec<TomlTransition>> }
 #[derive(Deserialize)]
-struct TomlAnchors {
-    text: Option<Vec<TomlTextAnchor>>,
-    color: Option<Vec<TomlColorAnchor>>,
-}
-
+struct TomlAnchors { text: Option<Vec<TomlTextAnchor>>, color: Option<Vec<TomlColorAnchor>> }
 #[derive(Deserialize)]
-struct TomlTextAnchor {
-    rect: [i32; 4],
-    val: String,
-}
-
+struct TomlTextAnchor { rect: [i32; 4], val: String }
 #[derive(Deserialize)]
-struct TomlColorAnchor {
-    pos: [i32; 2],
-    val: String,
-    tol: u8,
-}
-
+struct TomlColorAnchor { pos: [i32; 2], val: String, tol: u8 }
 #[derive(Deserialize)]
-struct TomlTransition {
-    target: String,
-    coords: [i32; 2],
-    post_delay: u32,
-}
+struct TomlTransition { target: String, coords: [i32; 2], post_delay: u32 }
 
 // ==========================================
-// 3. 编辑器核心状态
+// 2. 编辑器状态
 // ==========================================
 struct MapBuilderTool {
     texture: Option<egui::TextureHandle>,
     raw_image: Option<image::RgbaImage>, 
     img_size: Vec2,
     
-    // 场景信息
+    ocr_engine: Option<OcrEngine>,
+    ocr_test_result: String, 
+
     scene_id: String,
     scene_name: String,
     logic: RecognitionLogic,
     
-    // 交互状态
     start_pos: Option<Pos2>,
     current_rect: Option<Rect>,
     is_color_picker_mode: bool,
     capture_timer: Option<Instant>, 
 
-    // 数据
     drafts: Vec<UIElementDraft>,
-    toml_content: String, // 输入输出共用的文本区
-    status_msg: String,   // 底部状态栏提示
+    toml_content: String,
+    status_msg: String,
 }
+
+unsafe impl Send for MapBuilderTool {}
 
 impl MapBuilderTool {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_custom_fonts(&cc.egui_ctx);
+        
+        let engine = OcrEngine::TryCreateFromUserProfileLanguages().ok();
+        let status = if engine.is_some() { "OCR 引擎就绪" } else { "⚠️ OCR 初始化失败" };
+
         Self {
             texture: None,
             raw_image: None,
             img_size: Vec2::ZERO,
+            ocr_engine: engine,          
+            ocr_test_result: String::new(), 
             scene_id: "lobby_01".into(),
             scene_name: "游戏主界面".into(),
             logic: RecognitionLogic::AND,
@@ -111,7 +93,7 @@ impl MapBuilderTool {
             capture_timer: None,
             drafts: Vec::new(),
             toml_content: String::new(),
-            status_msg: "准备就绪".into(),
+            status_msg: status.into(),
         }
     }
 
@@ -143,16 +125,10 @@ impl MapBuilderTool {
         "#FFFFFF".into()
     }
 
-    // 🔥 核心功能：生成 TOML
     fn build_toml(&mut self) {
         let logic_str = if self.logic == RecognitionLogic::AND { "and" } else { "or" };
-        let mut toml = format!("[[scenes]]\nid = \"{}\"\nname = \"{}\"\nlogic = \"{}\"\n\n", 
-                                self.scene_id, self.scene_name, logic_str);
-        
-        // 使用标准的 TOML Table 格式
+        let mut toml = format!("[[scenes]]\nid = \"{}\"\nname = \"{}\"\nlogic = \"{}\"\n\n", self.scene_id, self.scene_name, logic_str);
         toml.push_str("[scenes.anchors]\n");
-        
-        // 1. Text Anchors
         toml.push_str("text = [\n");
         for d in self.drafts.iter() {
             if let ElementKind::TextAnchor { text } = &d.kind {
@@ -160,111 +136,132 @@ impl MapBuilderTool {
                     d.pos_or_rect.min.x as i32, d.pos_or_rect.min.y as i32, d.pos_or_rect.max.x as i32, d.pos_or_rect.max.y as i32, text));
             }
         }
-        toml.push_str("]\n");
-
-        // 2. Color Anchors
-        toml.push_str("color = [\n");
+        toml.push_str("]\ncolor = [\n");
         for d in self.drafts.iter() {
             if let ElementKind::ColorAnchor { color_hex, tolerance } = &d.kind {
                 toml.push_str(&format!("  {{ pos = [{}, {}], val = \"{}\", tol = {} }},\n",
                     d.pos_or_rect.min.x as i32, d.pos_or_rect.min.y as i32, color_hex, tolerance));
             }
         }
-        toml.push_str("]\n\n");
-
-        // 3. Transitions
-        toml.push_str("# --- 跳转动作 ---\n[[scenes.transitions]]\n"); // 头部占位，下面如果没数据也不影响
-        let mut trans_str = String::new();
+        toml.push_str("]\n\n# --- 动作步骤 ---\n");
         for d in self.drafts.iter() {
             if let ElementKind::Button { target, post_delay } = &d.kind {
-                trans_str.push_str("[[scenes.transitions]]\n");
-                trans_str.push_str(&format!("target = \"{}\"\n", target));
-                trans_str.push_str(&format!("coords = [{}, {}]\n", d.pos_or_rect.center().x as i32, d.pos_or_rect.center().y as i32));
-                trans_str.push_str(&format!("post_delay = {}\n\n", post_delay));
+                toml.push_str("[[scenes.transitions]]\n");
+                toml.push_str(&format!("target = \"{}\"\n", target));
+                toml.push_str(&format!("coords = [{}, {}]\n", d.pos_or_rect.center().x as i32, d.pos_or_rect.center().y as i32));
+                toml.push_str(&format!("post_delay = {}\n\n", post_delay));
             }
         }
-        // 清理一下如果不包含 transitions 的情况
-        if trans_str.is_empty() {
-            // 移除上面的占位符
-             toml = toml.replace("# --- 跳转动作 ---\n[[scenes.transitions]]\n", "");
-        } else {
-             // 替换掉占位符（因为下面循环是追加的 [[scenes.transitions]]，开头不需要空的）
-             toml = toml.replace("[[scenes.transitions]]\n", "");
-             toml.push_str(&trans_str);
-        }
-
         self.toml_content = toml;
         self.status_msg = "TOML 已生成".into();
     }
 
-    // 🔥 核心功能：导入 TOML
     fn import_toml(&mut self) {
-        if self.toml_content.trim().is_empty() {
-            self.status_msg = "导入失败：内容为空".into();
-            return;
-        }
-
+        if self.toml_content.trim().is_empty() { self.status_msg = "导入失败：内容为空".into(); return; }
         match toml::from_str::<TomlRoot>(&self.toml_content) {
             Ok(root) => {
                 if let Some(scene) = root.scenes.first() {
-                    // 1. 恢复场景基础信息
                     self.scene_id = scene.id.clone();
                     self.scene_name = scene.name.clone();
                     self.logic = if scene.logic.to_lowercase() == "or" { RecognitionLogic::OR } else { RecognitionLogic::AND };
-                    
-                    // 2. 清空当前画板
                     self.drafts.clear();
-
-                    // 3. 恢复 Anchors
                     if let Some(anchors) = &scene.anchors {
-                        // 恢复 Text Anchor
                         if let Some(texts) = &anchors.text {
                             for t in texts {
-                                let rect = Rect::from_min_max(
-                                    Pos2::new(t.rect[0] as f32, t.rect[1] as f32),
-                                    Pos2::new(t.rect[2] as f32, t.rect[3] as f32)
-                                );
-                                self.drafts.push(UIElementDraft {
-                                    pos_or_rect: rect,
-                                    kind: ElementKind::TextAnchor { text: t.val.clone() }
-                                });
+                                let rect = Rect::from_min_max(Pos2::new(t.rect[0] as f32, t.rect[1] as f32), Pos2::new(t.rect[2] as f32, t.rect[3] as f32));
+                                self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::TextAnchor { text: t.val.clone() } });
                             }
                         }
-                        // 恢复 Color Anchor
                         if let Some(colors) = &anchors.color {
                             for c in colors {
                                 let pos = Pos2::new(c.pos[0] as f32, c.pos[1] as f32);
-                                let rect = Rect::from_min_max(pos, pos + Vec2::splat(1.0)); // 恢复为1x1像素点
-                                self.drafts.push(UIElementDraft {
-                                    pos_or_rect: rect,
-                                    kind: ElementKind::ColorAnchor { color_hex: c.val.clone(), tolerance: c.tol }
-                                });
+                                let rect = Rect::from_min_max(pos, pos + Vec2::splat(1.0));
+                                self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::ColorAnchor { color_hex: c.val.clone(), tolerance: c.tol } });
                             }
                         }
                     }
-
-                    // 4. 恢复 Transitions (Button)
                     if let Some(transitions) = &scene.transitions {
                         for t in transitions {
-                            let center = Pos2::new(t.coords[0] as f32, t.coords[1] as f32);
-                            // 注意：TOML 只存了中心点，我们导入时生成一个默认大小的框(20x20)，方便用户看到和点击
-                            let rect = Rect::from_center_size(center, Vec2::splat(20.0));
-                            self.drafts.push(UIElementDraft {
-                                pos_or_rect: rect,
-                                kind: ElementKind::Button { target: t.target.clone(), post_delay: t.post_delay }
-                            });
+                            let rect = Rect::from_center_size(Pos2::new(t.coords[0] as f32, t.coords[1] as f32), Vec2::splat(20.0));
+                            self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::Button { target: t.target.clone(), post_delay: t.post_delay } });
                         }
                     }
                     self.status_msg = format!("成功导入场景：{}", self.scene_id);
                 }
             },
-            Err(e) => {
-                self.status_msg = format!("解析失败: {}", e);
+            Err(e) => { self.status_msg = format!("解析失败: {}", e); }
+        }
+    }
+
+    fn perform_ocr(&mut self, rect: Rect) {
+        if self.ocr_engine.is_none() {
+            self.ocr_test_result = "OCR 引擎未初始化".into();
+            return;
+        }
+        if let Some(img) = &self.raw_image {
+            let x = rect.min.x.max(0.0) as u32;
+            let y = rect.min.y.max(0.0) as u32;
+            let w = rect.width().max(1.0) as u32;
+            let h = rect.height().max(1.0) as u32;
+
+            if x + w > img.width() || y + h > img.height() {
+                self.ocr_test_result = "区域超出图片范围".into();
+                return;
+            }
+
+            let sub_img = image::imageops::crop_imm(img, x, y, w, h).to_image();
+            let scaled_img = image::imageops::resize(&sub_img, w * 2, h * 2, image::imageops::FilterType::Lanczos3);
+            let dynamic_img = image::DynamicImage::ImageRgba8(scaled_img);
+
+            let mut png_buffer = Cursor::new(Vec::new());
+            if dynamic_img.write_to(&mut png_buffer, image::ImageFormat::Png).is_err() {
+                self.ocr_test_result = "图像编码失败".into();
+                return;
+            }
+            
+            self.ocr_test_result = "识别中...".into();
+            let engine = self.ocr_engine.as_ref().unwrap();
+            let png_bytes = png_buffer.into_inner();
+
+            let run_recognition = || -> windows::core::Result<String> {
+                let stream = InMemoryRandomAccessStream::new()?;
+                let writer = DataWriter::CreateDataWriter(&stream)?;
+                writer.WriteBytes(&png_bytes)?;
+                writer.StoreAsync()?.get()?;
+                writer.FlushAsync()?.get()?;
+                stream.Seek(0)?;
+
+                let decoder = BitmapDecoder::CreateAsync(&stream)?.get()?;
+                let bmp = decoder.GetSoftwareBitmapAsync()?.get()?;
+                let result: OcrResult = engine.RecognizeAsync(&bmp)?.get()?;
+                
+                let mut text = String::new();
+                if let Ok(lines) = result.Lines() {
+                    for line in lines {
+                        if let Ok(h_str) = line.Text() {
+                            text.push_str(&h_str.to_string());
+                        }
+                    }
+                }
+                Ok(text.replace(char::is_whitespace, ""))
+            };
+
+            match run_recognition() {
+                Ok(txt) => {
+                    self.ocr_test_result = if txt.is_empty() { "无文字".to_string() } else { txt };
+                    self.status_msg = format!("OCR 完成: {}", self.ocr_test_result);
+                },
+                Err(e) => {
+                    self.ocr_test_result = format!("API 错误: {:?}", e);
+                }
             }
         }
     }
-}
+} // 🔥 MapBuilderTool 实现块结束
 
+// ==========================================
+// 3. UI 实现
+// ==========================================
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     if let Ok(data) = fs::read("C:\\Windows\\Fonts\\msyh.ttc") {
@@ -289,8 +286,8 @@ impl eframe::App for MapBuilderTool {
         }
 
         egui::SidePanel::left("side").min_width(350.0).show(ctx, |ui| {
-            ui.heading("🚀 MINKE UI 建模器 (Import/Export)");
-            ui.label(RichText::new(&self.status_msg).color(Color32::from_rgb(0, 255, 128))); // 状态提示
+            ui.heading("🚀 MINKE UI 建模器 (OCR测试)");
+            ui.label(RichText::new(&self.status_msg).color(Color32::from_rgb(0, 255, 128))); 
             ui.add_space(5.0);
             
             ui.group(|ui| {
@@ -317,6 +314,7 @@ impl eframe::App for MapBuilderTool {
             if let Some(rect) = self.current_rect {
                 ui.group(|ui| {
                     ui.label(RichText::new("已选中目标：").color(Color32::from_rgb(0, 255, 255)).strong());
+                    
                     if self.is_color_picker_mode {
                         let color = self.pick_color(rect.min);
                         ui.label(format!("HEX: {}", color));
@@ -325,10 +323,21 @@ impl eframe::App for MapBuilderTool {
                             self.current_rect = None;
                         }
                     } else {
-                        if ui.button("⚓ 添加 Text 锚点").clicked() {
-                            self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::TextAnchor { text: "Text".into() } });
-                            self.current_rect = None;
+                        ui.horizontal(|ui| {
+                            if ui.button("⚓ 添加 Text 锚点").clicked() {
+                                let val = if self.ocr_test_result.is_empty() || self.ocr_test_result.contains("...") { "Text".to_string() } else { self.ocr_test_result.clone() };
+                                self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::TextAnchor { text: val } });
+                                self.current_rect = None;
+                            }
+                            if ui.button("🔍 区域 OCR 测试").clicked() {
+                                self.perform_ocr(rect);
+                            }
+                        });
+                        
+                        if !self.ocr_test_result.is_empty() {
+                            ui.label(RichText::new(format!("识别结果: [{}]", self.ocr_test_result)).color(Color32::BLACK));
                         }
+
                         if ui.button("🖱️ 添加 Button 跳转").clicked() {
                             self.drafts.push(UIElementDraft { pos_or_rect: rect, kind: ElementKind::Button { target: "next".into(), post_delay: 500 } });
                             self.current_rect = None;
@@ -366,9 +375,7 @@ impl eframe::App for MapBuilderTool {
             });
             
             egui::ScrollArea::vertical().id_source("toml_scroll").show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut self.toml_content)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(f32::INFINITY));
+                ui.add(egui::TextEdit::multiline(&mut self.toml_content).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY));
             });
         });
 
@@ -400,7 +407,11 @@ impl eframe::App for MapBuilderTool {
                     let curr = from_screen(curr_raw);
                     let rect = if self.is_color_picker_mode { Rect::from_min_max(curr, curr + Vec2::splat(1.0)) } else { Rect::from_two_pos(start, curr) };
                     painter.rect_stroke(Rect::from_min_max(to_screen(rect.min), to_screen(rect.max)), 0.0, Stroke::new(1.5, Color32::RED));
-                    if resp.drag_released() { self.current_rect = Some(rect); self.start_pos = None; }
+                    if resp.drag_released() { 
+                        self.current_rect = Some(rect); 
+                        self.start_pos = None; 
+                        self.ocr_test_result.clear(); 
+                    }
                 }
             } else {
                 ui.centered_and_justified(|ui| ui.label("点击左侧『3秒延时截图』开始工作"));

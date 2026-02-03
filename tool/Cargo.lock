@@ -2804,6 +2804,7 @@ dependencies = [
  "serde",
  "toml",
  "winapi",
+ "windows 0.52.0",
 ]
 
 [[package]]
