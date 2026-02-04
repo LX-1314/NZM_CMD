@@ -1,5 +1,5 @@
 // src/human.rs
-use crate::InputDevice;
+use crate::hardware::InputDevice; // 👈 路径变更
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;

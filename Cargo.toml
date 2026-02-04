@@ -1,5 +1,5 @@
 [package]
-name = "minke_driver"
+name = "nzm_cmd"
 version = "0.1.0"
 edition = "2021"
 
@@ -16,7 +16,7 @@ screenshots = "0.8"
 image = "0.25"  # 确保是 0.25
 hex = "0.4"
 regex = "1.10"
-# 🔥 修改这里：添加 Foundation_Collections
+clap = { version = "4.4", features = ["derive"] }
 windows = { version = "0.52", features = [
     "Globalization",
     "Graphics_Imaging",

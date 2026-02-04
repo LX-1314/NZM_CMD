@@ -11,6 +11,19 @@ use std::time::{Duration, Instant};
 // ==========================================
 // 1. 数据结构协议
 // ==========================================
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "type")] // JSON 中使用 "type": "Click" 来区分
+pub enum InitAction {
+    Move { x: u16, y: u16 },
+    Click { 
+        #[serde(default)] left: bool, 
+        #[serde(default)] right: bool,
+        #[serde(default)] hold_ms: u64 
+    },
+    Key { char: char },
+    Wait { ms: u64 },
+    Log { msg: String },
+}
 
 #[derive(Debug, Clone)]
 pub struct TDConfig {
