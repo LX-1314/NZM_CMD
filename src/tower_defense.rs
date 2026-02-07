@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 // 1. 数据结构协议
 // ==========================================
 
-// ==========================================
-// 新增：预备阶段动作定义
-// ==========================================
+// ✨ 新增：预备阶段动作定义 (用于 MapMeta)
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 pub enum PrepAction {
@@ -24,17 +22,8 @@ pub enum PrepAction {
     Log { msg: String },
 }
 
-// 辅助函数：将字符转换为 HID 键码 (为了不依赖 human.rs 的私有方法，这里简单实现一个)
-fn get_hid_code(c: char) -> u8 {
-    match c.to_ascii_lowercase() {
-        'a'..='z' => c.to_ascii_lowercase() as u8 - b'a' + 0x04,
-        '0'..='9' => c as u8 - b'1' + 0x1E, // 简略处理
-        ' ' => 0x2C,
-        _ => 0,
-    }
-}
 #[derive(Deserialize, Debug, Clone)]
-#[serde(tag = "type")] // JSON 中使用 "type": "Click" 来区分
+#[serde(tag = "type")]
 pub enum InitAction {
     Move {
         x: u16,
@@ -80,15 +69,17 @@ impl Default for TDConfig {
     }
 }
 
+// ✨ 修改：TrapConfigItem 增加 b_type 和 grid_index
 #[derive(Deserialize, Debug, Clone)]
 pub struct TrapConfigItem {
     pub name: String,
     #[serde(default)]
-    pub b_type: String,
+    pub b_type: String, // "Floor", "Wall", "Ceiling"
     #[serde(default)]
-    pub grid_index: [i32; 2],
+    pub grid_index: [i32; 2], // [col, row]
 }
 
+// ✨ 修改：MapMeta 增加 prep_actions
 #[derive(Deserialize, Debug, Clone)]
 pub struct MapMeta {
     pub grid_pixel_size: f32,
@@ -153,12 +144,6 @@ pub struct WaveStatus {
     pub current_wave: i32,
 }
 
-struct TaskWithPos<T> {
-    data: T,
-    map_y: f32,
-    map_x: f32,
-}
-
 #[derive(Clone)]
 enum TaskAction {
     Demolish(DemolishEvent),
@@ -172,6 +157,16 @@ struct ScheduledTask {
     map_y: f32,
     map_x: f32,
     priority: u8,
+}
+
+// 辅助函数：将字符转换为 HID 键码
+fn get_hid_code(c: char) -> u8 {
+    match c.to_ascii_lowercase() {
+        'a'..='z' => c.to_ascii_lowercase() as u8 - b'a' + 0x04,
+        '0'..='9' => c as u8 - b'1' + 0x1E,
+        ' ' => 0x2C,
+        _ => 0,
+    }
 }
 
 // ==========================================
@@ -278,7 +273,11 @@ impl TowerDefenseApp {
             return None;
         }
 
-        println!("🔍 [OCR Debug] 原始文本: 「{}」 (Mode: {})", text.trim(), if use_tab { "TAB" } else { "HUD" });
+        println!(
+            "🔍 [OCR Debug] 原始文本: 「{}」 (Mode: {})",
+            text.trim(),
+            if use_tab { "TAB" } else { "HUD" }
+        );
 
         let val = if use_tab {
             let re = Regex::new(r"(\d+)[/\dSI日]+.*波次").ok()?;
@@ -316,14 +315,9 @@ impl TowerDefenseApp {
         }
     }
 
-    // 🔥 新增：辅助函数，判断任务是否都在当前视野安全区内
     fn are_tasks_in_current_view(&self, tasks: &[ScheduledTask]) -> bool {
         let [_, sz_y1, _, sz_y2] = self.config.safe_zone;
-        
-        // 当前屏幕顶部在地图上的逻辑坐标
         let view_top = self.camera_offset_y;
-        
-        // 安全区的绝对地图坐标范围
         let safe_map_top = view_top + sz_y1 as f32;
         let safe_map_bottom = view_top + sz_y2 as f32;
 
@@ -334,45 +328,61 @@ impl TowerDefenseApp {
         }
         true
     }
-pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
-        let phase_name = if is_late { "后期" } else { "前期" };
-        println!("🚀 优化执行第 {} 波 [{}] (拆除优先模式)...", wave, phase_name);
 
-        // 1. 分类收集任务
+    pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
+        let phase_name = if is_late { "后期" } else { "前期" };
+        println!(
+            "🚀 优化执行第 {} 波 [{}] (拆除优先模式)...",
+            wave, phase_name
+        );
+
         let mut demolish_tasks = Vec::new();
         let mut build_upgrade_tasks = Vec::new();
 
-        // 收集拆除任务 (Priority 0)
         for d in self.strategy_demolishes.iter().filter(|d| {
-            d.wave_num == wave && d.is_late == is_late && !self.completed_demolish_uids.contains(&d.uid)
+            d.wave_num == wave
+                && d.is_late == is_late
+                && !self.completed_demolish_uids.contains(&d.uid)
         }) {
-            if let Some((px, py)) = self.get_absolute_map_pixel(d.grid_x, d.grid_y, d.width, d.height) {
+            if let Some((px, py)) =
+                self.get_absolute_map_pixel(d.grid_x, d.grid_y, d.width, d.height)
+            {
                 demolish_tasks.push(ScheduledTask {
                     action: TaskAction::Demolish(d.clone()),
-                    map_y: py, map_x: px, priority: 0,
+                    map_y: py,
+                    map_x: px,
+                    priority: 0,
                 });
             }
         }
 
-        // 收集建造任务 (Priority 1)
         for b in self.strategy_buildings.iter().filter(|b| {
             b.wave_num == wave && b.is_late == is_late && !self.placed_uids.contains(&b.uid)
         }) {
-            if let Some((px, py)) = self.get_absolute_map_pixel(b.grid_x, b.grid_y, b.width, b.height) {
+            if let Some((px, py)) =
+                self.get_absolute_map_pixel(b.grid_x, b.grid_y, b.width, b.height)
+            {
                 build_upgrade_tasks.push(ScheduledTask {
                     action: TaskAction::Place(b.clone()),
-                    map_y: py, map_x: px, priority: 1,
+                    map_y: py,
+                    map_x: px,
+                    priority: 1,
                 });
             }
         }
 
-        // 收集升级任务 (Priority 2)
-        for u in self.strategy_upgrades.iter().filter(|u| u.wave_num == wave && u.is_late == is_late) {
+        for u in self
+            .strategy_upgrades
+            .iter()
+            .filter(|u| u.wave_num == wave && u.is_late == is_late)
+        {
             let key = format!("{}-{}-{}", u.building_name, u.wave_num, u.is_late);
             if !self.completed_upgrade_keys.contains(&key) {
                 build_upgrade_tasks.push(ScheduledTask {
                     action: TaskAction::Upgrade(u.clone()),
-                    map_y: 0.0, map_x: 0.0, priority: 2,
+                    map_y: 0.0,
+                    map_x: 0.0,
+                    priority: 2,
                 });
             }
         }
@@ -381,36 +391,41 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
             return;
         }
 
-        // --- 第一阶段：优先执行所有拆除任务 ---
         if !demolish_tasks.is_empty() {
-            println!("🧹 [Step 1] 正在执行全图拆除任务 ({}个)...", demolish_tasks.len());
+            println!(
+                "🧹 [Step 1] 正在执行全图拆除任务 ({}个)...",
+                demolish_tasks.len()
+            );
             self.dispatch_tasks_by_region(demolish_tasks);
         }
 
-        // --- 第二阶段：执行建造和升级任务 ---
         if !build_upgrade_tasks.is_empty() {
-            println!("🏗️ [Step 2] 正在执行建造与升级任务 ({}个)...", build_upgrade_tasks.len());
-            // 确保建造内部依然遵循 Priority (先建后升)
+            println!(
+                "🏗️ [Step 2] 正在执行建造与升级任务 ({}个)...",
+                build_upgrade_tasks.len()
+            );
             build_upgrade_tasks.sort_by(|a, b| a.priority.cmp(&b.priority));
             self.dispatch_tasks_by_region(build_upgrade_tasks);
         }
     }
 
-    /// 辅助函数：将一组任务按区域执行（包含智能归零逻辑）
     fn dispatch_tasks_by_region(&mut self, tasks: Vec<ScheduledTask>) {
         let meta = self.map_meta.as_ref().unwrap();
         let map_h = meta.bottom;
         let screen_h = self.config.screen_height;
         let mid_point = (map_h - screen_h) / 2.0;
 
-        // 分区：上半区 vs 下半区
         let (mut upper, mut lower): (Vec<_>, Vec<_>) = tasks
             .into_iter()
             .partition(|t| t.map_y <= mid_point + screen_h / 2.0);
 
-        // 处理上半区
         if !upper.is_empty() {
-            upper.sort_by(|a, b| a.map_y.partial_cmp(&b.map_y).unwrap().then(a.priority.cmp(&b.priority)));
+            upper.sort_by(|a, b| {
+                a.map_y
+                    .partial_cmp(&b.map_y)
+                    .unwrap()
+                    .then(a.priority.cmp(&b.priority))
+            });
             if self.are_tasks_in_current_view(&upper) {
                 println!("✨ 上半区任务在视野内，直接执行");
                 self.process_task_batch(upper, false);
@@ -420,9 +435,13 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
             }
         }
 
-        // 处理下半区
         if !lower.is_empty() {
-            lower.sort_by(|a, b| b.map_y.partial_cmp(&a.map_y).unwrap().then(a.priority.cmp(&b.priority)));
+            lower.sort_by(|a, b| {
+                b.map_y
+                    .partial_cmp(&a.map_y)
+                    .unwrap()
+                    .then(a.priority.cmp(&b.priority))
+            });
             if self.are_tasks_in_current_view(&lower) {
                 println!("✨ 下半区任务在视野内，直接执行");
                 self.process_task_batch(lower, false);
@@ -432,6 +451,7 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
             }
         }
     }
+
     fn process_task_batch(&mut self, tasks: Vec<ScheduledTask>, force_initial_refresh: bool) {
         let mut last_build_key: Option<char> = None;
         let mut is_first_task = true;
@@ -442,11 +462,7 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
                 continue;
             }
 
-            // 计算是否因为距离变动导致了“屏幕移动”
             let mut screen_moved = self.smart_move_camera(task.map_y);
-
-            // 如果是本批次的第一个任务，且外部要求强制刷新（因为刚归零过），
-            // 那么强制认为 screen_moved = true，从而触发 perform_build_action 中的“三连击”
             if is_first_task && force_initial_refresh {
                 screen_moved = true;
                 is_first_task = false;
@@ -484,7 +500,7 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         thread::sleep(Duration::from_millis(300));
     }
 
-    fn perform_build_action(
+fn perform_build_action(
         &mut self,
         last_key: &mut Option<char>,
         screen_moved: bool,
@@ -499,28 +515,47 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         let key = self.get_trap_key(name);
 
         if let Ok(mut d) = self.driver.lock() {
+            // 1. 移动鼠标
             d.move_to_humanly(screen_x as u16, screen_y as u16, 0.35);
+            
+            // [优化点 1] 移动到位后，强制让鼠标“稳”一下。
+            // 很多时候移动完立刻按键+点击，准星还没对齐格子。
+            thread::sleep(Duration::from_millis(50)); 
 
-            // 策略执行：只有在屏幕动过（或刚归零过）时才进行三连击
             if screen_moved {
                 let swap_key = if key == '4' { '5' } else { '4' };
+                // [优化点 2] 切枪逻辑稍微放宽间隔，防止吞键
                 d.key_click(key);
-                thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(120)); // 100 -> 120
                 d.key_click(swap_key);
-                thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(120)); // 100 -> 120
                 d.key_click(key);
-                thread::sleep(Duration::from_millis(150));
+                
+                // [优化点 3] 关键延迟：按下最后一次键后，必须等待陷阱虚影完全显示
+                // 如果这里太快点击，会变成“开枪”。建议增加到 250ms
+                thread::sleep(Duration::from_millis(250)); 
                 *last_key = Some(key);
             } else if Some(key) != *last_key {
-                // 原地换塔：只点一次
+                // 原地换塔
                 d.key_click(key);
                 *last_key = Some(key);
-                thread::sleep(Duration::from_millis(150));
+                // 同理，换塔后也要等待虚影
+                thread::sleep(Duration::from_millis(250));
+            } else {
+                // [优化点 4] 即使不用换键，如果刚移动过鼠标，最好也稍微等一下虚影跟随过来
+                // 如果 key 没变，且 screen 没动，这里可以不加延迟，或者加很短的
+                thread::sleep(Duration::from_millis(50));
             }
 
-            d.double_click_humanly(true, false, 200);
+            // [优化点 5] 双击间隔优化
+            // 原来的 300ms 间隔太长了（总耗时0.6秒），既然前面已经等待了虚影出现，
+            // 这里可以缩短双击间隔，提高爆发速度。
+            // 改为 150ms 间隔，既能被识别为双击，又不会浪费太多时间。
+            d.double_click_humanly(true, false, 150);
         }
         self.placed_uids.insert(uid);
+        
+        // 动作后摇，保持 250ms 或根据游戏攻速调整
         thread::sleep(Duration::from_millis(250));
     }
 
@@ -548,26 +583,25 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         thread::sleep(Duration::from_millis(500));
     }
 
-    // 🔥 新增：像素级滚动封装函数
-    fn scroll_camera_by_pixels(&self, direction: char, pixels: f32, time_resolution_ms: u64) -> f32 {
-        if pixels < 10.0 { return 0.0; }
-
+    fn scroll_camera_by_pixels(
+        &self,
+        direction: char,
+        pixels: f32,
+        time_resolution_ms: u64,
+    ) -> f32 {
+        if pixels < 10.0 {
+            return 0.0;
+        }
         let raw_ms = (pixels / self.move_speed * 1000.0) as u64;
-        
-        // 量子化取整
         let units = (raw_ms + time_resolution_ms / 2) / time_resolution_ms;
         let final_ms = units.max(1) * time_resolution_ms;
 
         if let Ok(mut human) = self.driver.lock() {
-            // println!("📷 滚动: {:.1}px -> {}ms", pixels, final_ms);
             human.key_hold(direction, final_ms);
         }
-
-        // 返回实际移动距离
         (final_ms as f32 / 1000.0) * self.move_speed
     }
 
-    // 返回 true 表示确实进行了物理移动
     fn smart_move_camera(&mut self, target_map_y: f32) -> bool {
         let [_, z_y1, _, z_y2] = self.config.safe_zone;
         let screen_h = self.config.screen_height;
@@ -577,37 +611,29 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         let ideal_cam_y = (target_map_y - safe_center_screen_y).clamp(0.0, max_scroll_y);
         let delta = ideal_cam_y - self.camera_offset_y;
 
-        // 小于 30 像素不移动
         if delta.abs() < 30.0 {
             return false;
         }
 
         let mid_scroll = max_scroll_y / 2.0;
-        const SCROLL_RES: u64 = 100; // 时间分辨率 100ms
+        const SCROLL_RES: u64 = 100;
 
         if ideal_cam_y <= mid_scroll {
-            // 归零到顶部 (0)
             self.align_camera_to_edge(true);
             self.camera_offset_y = 0.0;
-
-            // 向下微调
             if ideal_cam_y > 10.0 {
                 let moved = self.scroll_camera_by_pixels('s', ideal_cam_y, SCROLL_RES);
                 self.camera_offset_y += moved;
             }
         } else {
-            // 归零到底部
             self.align_camera_to_edge(false);
             self.camera_offset_y = max_scroll_y;
-
-            // 向上微调
             let dist_up = max_scroll_y - ideal_cam_y;
             if dist_up > 10.0 {
                 let moved = self.scroll_camera_by_pixels('w', dist_up, SCROLL_RES);
                 self.camera_offset_y -= moved;
             }
         }
-
         thread::sleep(Duration::from_millis(200));
         true
     }
@@ -654,55 +680,54 @@ pub fn execute_wave_phase(&mut self, wave: i32, is_late: bool) {
         self.camera_offset_y = 0.0;
     }
 
-pub fn execute_prep_logic(&self) {
+    pub fn execute_prep_logic(&self) {
         println!("🔧 执行赛前准备...");
 
-        // 1. 执行 MapMeta 中配置的战术动作 (如助跑跳)
         if let Some(meta) = &self.map_meta {
             if !meta.prep_actions.is_empty() {
                 println!("   -> 加载自定义战术动作 ({} 步)", meta.prep_actions.len());
-                if let Ok(mut human) = self.driver.lock() {
+                if let Ok(human) = self.driver.lock() {
                     if let Ok(mut dev) = human.device.lock() {
                         for action in &meta.prep_actions {
                             match action {
                                 PrepAction::KeyDown { key } => {
                                     let code = get_hid_code(*key);
-                                    if code != 0 { dev.key_down(code, 0); }
+                                    if code != 0 {
+                                        dev.key_down(code, 0);
+                                    }
                                 }
                                 PrepAction::KeyUpAll => {
                                     dev.key_up();
                                 }
                                 PrepAction::Wait { ms } => {
-                                    drop(dev); // 释放锁以允许心跳
+                                    drop(dev);
                                     thread::sleep(Duration::from_millis(*ms));
-                                    dev = human.device.lock().unwrap(); // 重新获取锁
+                                    dev = human.device.lock().unwrap();
                                 }
                                 PrepAction::Log { msg } => {
                                     println!("   [Prep] {}", msg);
                                 }
                             }
                         }
-                        dev.key_up(); // 确保结束后松开按键
+                        dev.key_up();
                     }
                 }
             }
         }
 
-        // 2. 打开菜单
         if let Ok(mut human) = self.driver.lock() {
             human.key_click('n');
             thread::sleep(Duration::from_millis(500));
         }
 
-        // 3. 选塔 (使用内部 active_loadout)
         self.select_loadout();
 
-        // 4. 关闭菜单
         if let Ok(mut human) = self.driver.lock() {
             human.key_click('n');
             thread::sleep(Duration::from_millis(500));
         }
     }
+
     pub fn select_loadout(&self) {
         const GRID_START_X: i32 = 520;
         const GRID_START_Y: i32 = 330;
@@ -711,26 +736,22 @@ pub fn execute_prep_logic(&self) {
 
         for name in self.active_loadout.iter().take(4) {
             if let Some(config) = self.trap_lookup.get(name) {
-                // 1. 根据 b_type 切换标签
                 let (tab_x, tab_y) = match config.b_type.as_str() {
-                    "Wall" => (172, 375),    // ⚠️ TODO: 请确认墙面标签的 Y 坐标
-                    "Ceiling" => (172, 462), // ⚠️ TODO: 请确认天花板标签的 Y 坐标
-                    _ => (172, 294),         // 默认为地面 Floor
+                    "Wall" => (172, 375),
+                    "Ceiling" => (172, 462),
+                    _ => (172, 294),
                 };
 
                 if let Ok(mut d) = self.driver.lock() {
-                    // 点击分类标签
                     d.move_to_humanly(tab_x, tab_y, 0.4);
                     d.click_humanly(true, false, 0);
                     thread::sleep(Duration::from_millis(350));
 
-                    // 2. 计算网格坐标
                     let col = config.grid_index[0];
                     let row = config.grid_index[1];
                     let target_x = GRID_START_X + col * GRID_STEP_X;
                     let target_y = GRID_START_Y + row * GRID_STEP_Y;
 
-                    // 点击具体陷阱
                     d.move_to_humanly(target_x as u16, target_y as u16, 0.4);
                     d.click_humanly(true, false, 0);
                 }
@@ -769,24 +790,20 @@ pub fn execute_prep_logic(&self) {
         }
     }
 
-pub fn run(&mut self, terrain_p: &str, strategy_p: &str, trap_p: &str) {
-        // 1. 加载所有配置
+    pub fn run(&mut self, terrain_p: &str, strategy_p: &str, trap_p: &str) {
         self.load_map_terrain(terrain_p);
-        self.load_trap_config(trap_p); // 先加载陷阱库
-        self.load_strategy(strategy_p); // 再加载策略
+        self.load_trap_config(trap_p);
+        self.load_strategy(strategy_p);
 
-        // 2. ✨ 自动从策略中提取需要携带的陷阱
         let mut seen = HashSet::new();
         let mut derived_loadout = Vec::new();
 
-        // 收集建造任务中的塔
         for b in &self.strategy_buildings {
             if !seen.contains(&b.name) && self.trap_lookup.contains_key(&b.name) {
                 seen.insert(b.name.clone());
                 derived_loadout.push(b.name.clone());
             }
         }
-        // 收集升级任务中的塔
         for u in &self.strategy_upgrades {
             if !seen.contains(&u.building_name) && self.trap_lookup.contains_key(&u.building_name) {
                 seen.insert(u.building_name.clone());
@@ -795,13 +812,12 @@ pub fn run(&mut self, terrain_p: &str, strategy_p: &str, trap_p: &str) {
         }
 
         if derived_loadout.is_empty() {
-             println!("⚠️ 警告: 策略中未发现已知陷阱，装备栏将为空！");
+            println!("⚠️ 警告: 策略中未发现已知陷阱，装备栏将为空！");
         } else {
-             println!("📋 自动分析策略，生成装备列表: {:?}", derived_loadout);
+            println!("📋 自动分析策略，生成装备列表: {:?}", derived_loadout);
         }
         self.active_loadout = derived_loadout;
 
-        // 3. 进入游戏逻辑
         if let Ok(mut human) = self.driver.lock() {
             println!("👆 点击游戏入口...");
             human.move_to_humanly(1700, 950, 0.5);
@@ -822,13 +838,19 @@ pub fn run(&mut self, terrain_p: &str, strategy_p: &str, trap_p: &str) {
             thread::sleep(Duration::from_millis(1000));
         }
 
-        // 4. 执行赛前准备 (无参调用)
         self.execute_prep_logic();
         self.setup_view();
 
         println!("🤖 自动化监控中...");
+        let mut no_wave_count = 0;
         loop {
-            if let Some(status) = self.recognize_wave_status(self.config.hud_wave_loop_rect, true) {
+            // 尝试检测波次 (带 Tab 切换)
+            // 我们把结果存下来，以便处理 "未检测到" 的情况
+            let wave_status_opt = self.recognize_wave_status(self.config.hud_wave_loop_rect, true);
+
+            if let Some(status) = wave_status_opt {
+                // === 情况 A: 正常检测到波次 ===
+                no_wave_count = 0; // 重置计数器
                 if self.validate_wave_transition(status.current_wave) {
                     let current_wave = status.current_wave;
                     self.execute_wave_phase(current_wave, false);
@@ -839,7 +861,30 @@ pub fn run(&mut self, terrain_p: &str, strategy_p: &str, trap_p: &str) {
                     thread::sleep(Duration::from_secs(1));
                     self.execute_wave_phase(current_wave, true);
                 }
+            } else {
+                // === 情况 B: 未检测到波次 (可能是结算界面) ===
+                no_wave_count += 1;
+                println!(
+                    "⚠️ [Monitor] 未检测到波次信息 ({}/2)，尝试跳过结算...",
+                    no_wave_count
+                );
+
+                // 1. 按一次空格 (跳过结算动画/关闭弹窗)
+                if let Ok(mut d) = self.driver.lock() {
+                    dev.key_down(0x29, 0); 
+                    dev.key_up(); // 松开所有按键
+                    println!("   -> 点击空格 (Space)");
+                    d.key_click(' ');
+                }
+
+                // 2. 检查退出条件
+                if no_wave_count >= 2 {
+                    println!("🏁 连续 2 次未检测到波次，判定为游戏结束。");
+                    println!("🔄 退出当前循环，返回主程序...");
+                    break; // 跳出 loop，函数结束，控制权交还给 main 的 loop
+                }
             }
+
             thread::sleep(Duration::from_millis(10000));
         }
     }

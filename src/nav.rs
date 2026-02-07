@@ -3,7 +3,7 @@ use crate::human::HumanDriver;
 use serde::Deserialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering}; // 引入原子操作支持
+use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::fs;

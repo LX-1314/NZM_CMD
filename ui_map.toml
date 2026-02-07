@@ -88,26 +88,26 @@ logic = "and"
 
 [scenes.anchors]
 text = [
-  { rect = [145, 60, 210, 103], val = "地图" },
+  { rect = [86, 502, 279, 569], val = "联盟大厦" },
 ]
 color = [
 ]
 
-# --- 跳转动作 ---
+# --- 动作步骤 ---
+[[scenes.transitions]]
+target = "联盟大厦地图"
+coords = [377, 349]
+post_delay = 500
+
 [[scenes.transitions]]
 target = "空间站地图"
-coords = [352, 349]
-post_delay = 1000
+coords = [977, 354]
+post_delay = 500
 
 [[scenes.transitions]]
 target = "20号星港地图"
-coords = [964, 354]
-post_delay = 1000
-
-[[scenes.transitions]]
-target = "联盟大厦地图"
-coords = [1561, 344]
-post_delay = 1000
+coords = [1579, 350]
+post_delay = 500
 
 
 [[scenes]]

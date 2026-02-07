@@ -17,7 +17,6 @@ struct Args {
     port: String,
 
     /// 导航目标界面名称 (例如: "空间站普通", "空间站炼狱")
-    /// 这个名字将直接用于寻找对应的地图和策略文件
     #[arg(short, long, default_value = "空间站普通")]
     target: String,
 
@@ -65,10 +64,9 @@ fn main() {
     let engine = Arc::new(NavEngine::new("ui_map.toml", Arc::clone(&human_driver)));
 
     // ==========================================
-    // 🔍 分发测试逻辑
+    // 🔍 测试模式 (测试完直接退出)
     // ==========================================
     if let Some(mode) = args.test.as_deref() {
-        // ... (测试代码保持不变) ...
         println!("⏳ 5秒后开始执行 [{}] 测试...", mode);
         thread::sleep(Duration::from_secs(5));
         match mode {
@@ -81,38 +79,67 @@ fn main() {
     }
 
     // ==========================================
-    // 🚀 正常业务流程
+    // 🚀 自动化循环 (正常业务流程)
     // ==========================================
-    println!("✅ 引擎就绪，5秒后开始自动导航...");
+    println!("✅ 引擎就绪，5秒后开始自动化循环...");
     thread::sleep(Duration::from_secs(5));
 
-    println!("\n🔄 [主控] 正在导航至: {}...", args.target);
-    let nav_result = engine.navigate(&args.target);
+    // ✨ 核心修改：无限循环
+    loop {
+        println!("\n🔄 [主控] 正在导航至: {}...", args.target);
+        
+        // 执行导航
+        let nav_result = engine.navigate(&args.target);
 
-    match nav_result {
-        NavResult::Handover(scene_id) => {
-            println!("⚔️ [主控] 控制权移交: [{}] -> 启动塔防逻辑", scene_id);
-            let mut td_app = TowerDefenseApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
+        match nav_result {
+            NavResult::Handover(scene_id) => {
+                println!("⚔️ [主控] 导航成功: [{}] -> 启动塔防逻辑", scene_id);
+                
+                // 1. 初始化塔防 APP
+                let mut td_app = TowerDefenseApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
+                
+                // 2. 动态生成文件名
+                let map_file = format!("{}地图.json", scene_id);
+                let strategy_file = format!("{}策略.json", scene_id);
+                let traps_file = "traps_config.json";
+
+                println!("📂 加载配置: {} | {}", map_file, strategy_file);
+
+                // 3. 运行塔防逻辑 (阻塞直到游戏结束)
+                td_app.run(&map_file, &strategy_file, traps_file);
+
+                // 4. 运行结束，准备下一轮
+                println!("🎉 本局结束，5秒后重新开始循环...");
+                thread::sleep(Duration::from_secs(5));
+            }
             
-            // ✨✨✨ 核心修改：动态生成文件名 ✨✨✨
-            // 规则：
-            // 1. 地图文件 = "{目标名}地图.json"
-            // 2. 策略文件 = "{目标名}策略.json"
-            // 3. 陷阱配置 = "traps_config.json" (默认通用)
-            let map_file = format!("{}地图.json", scene_id);
-            let strategy_file = format!("{}策略.json", scene_id);
-            let traps_file = "traps_config.json";
+            NavResult::Failed => {
+                println!("❌ [主控] 导航失败，执行重置操作 (ESC)...");
+                
+                // 尝试按下 ESC (HID code 0x29) 关闭可能的弹窗或菜单
+                if let Ok(mut human) = human_driver.lock() {
+                    if let Ok(mut dev) = human.device.lock() {
+                        // 0x29 是键盘 ESC 的 HID 码
+                        dev.key_down(0x29, 0);
+                    }
+                    thread::sleep(Duration::from_millis(100));
 
-            println!("📂 自动加载配置:");
-            println!("   📄 地图: {}", map_file);
-            println!("   📄 策略: {}", strategy_file);
-            println!("   📄 陷阱: {}", traps_file);
-
-            // 调用 run，传入生成的路径
-            td_app.run(&map_file, &strategy_file, traps_file);
+                    if let Ok(mut dev) = human.device.lock() {
+                        dev.key_up(); // 松开所有按键
+                    }
+                }
+                
+                println!("⏳ 等待界面重置 (3秒)...");
+                thread::sleep(Duration::from_secs(3));
+                // 循环会自动 continue，重试导航
+            }
+            
+            NavResult::Success => {
+                println!("✅ [主控] 导航到达终点 (无后续逻辑)，等待重置...");
+                thread::sleep(Duration::from_secs(5));
+                // 如果是单纯的领取任务，这里可以 continue 继续下一轮
+            }
         }
-        NavResult::Success => println!("✅ [主控] 到达目标，任务完成。"),
-        NavResult::Failed => println!("❌ [主控] 导航失败。"),
     }
 }
 
