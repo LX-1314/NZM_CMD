@@ -500,7 +500,7 @@ impl TowerDefenseApp {
         thread::sleep(Duration::from_millis(300));
     }
 
-fn perform_build_action(
+    fn perform_build_action(
         &mut self,
         last_key: &mut Option<char>,
         screen_moved: bool,
@@ -517,10 +517,10 @@ fn perform_build_action(
         if let Ok(mut d) = self.driver.lock() {
             // 1. 移动鼠标
             d.move_to_humanly(screen_x as u16, screen_y as u16, 0.35);
-            
+
             // [优化点 1] 移动到位后，强制让鼠标“稳”一下。
             // 很多时候移动完立刻按键+点击，准星还没对齐格子。
-            thread::sleep(Duration::from_millis(50)); 
+            thread::sleep(Duration::from_millis(50));
 
             if screen_moved {
                 let swap_key = if key == '4' { '5' } else { '4' };
@@ -530,10 +530,10 @@ fn perform_build_action(
                 d.key_click(swap_key);
                 thread::sleep(Duration::from_millis(120)); // 100 -> 120
                 d.key_click(key);
-                
+
                 // [优化点 3] 关键延迟：按下最后一次键后，必须等待陷阱虚影完全显示
                 // 如果这里太快点击，会变成“开枪”。建议增加到 250ms
-                thread::sleep(Duration::from_millis(250)); 
+                thread::sleep(Duration::from_millis(250));
                 *last_key = Some(key);
             } else if Some(key) != *last_key {
                 // 原地换塔
@@ -554,7 +554,7 @@ fn perform_build_action(
             d.double_click_humanly(true, false, 150);
         }
         self.placed_uids.insert(uid);
-        
+
         // 动作后摇，保持 250ms 或根据游戏攻速调整
         thread::sleep(Duration::from_millis(250));
     }
@@ -869,12 +869,29 @@ fn perform_build_action(
                     no_wave_count
                 );
 
-                // 1. 按一次空格 (跳过结算动画/关闭弹窗)
                 if let Ok(mut d) = self.driver.lock() {
-                    dev.key_down(0x29, 0); 
-                    dev.key_up(); // 松开所有按键
-                    println!("   -> 点击空格 (Space)");
+                    println!("   -> 点击空格 (Space) + 双击 ESC");
+
+                    // 直接操作底层设备发送 HID 码 0x29 (ESC)
+                    if let Ok(mut dev) = d.device.lock() {
+                        // 第一次 ESC
+                        dev.key_down(0x29, 0);
+                        thread::sleep(Duration::from_millis(100)); // 按下持续时间
+                        dev.key_up();
+
+                        thread::sleep(Duration::from_millis(300)); // 两次按键间隔
+                    }
+
+                    // 点击空格 (跳过结算动画)
                     d.key_click(' ');
+                    thread::sleep(Duration::from_millis(500));
+
+                    if let Ok(mut dev) = d.device.lock() {
+                        // 第二次 ESC
+                        dev.key_down(0x29, 0);
+                        thread::sleep(Duration::from_millis(100));
+                        dev.key_up();
+                    }
                 }
 
                 // 2. 检查退出条件

@@ -121,6 +121,7 @@ fn main() {
                     if let Ok(mut dev) = human.device.lock() {
                         // 0x29 是键盘 ESC 的 HID 码
                         dev.key_down(0x29, 0);
+                        dev.key_down(0x2C, 0);
                     }
                     thread::sleep(Duration::from_millis(100));
 
