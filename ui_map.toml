@@ -31,10 +31,54 @@ target = "选择玩法"
 coords = [1672, 924]
 post_delay = 1000
 
+[[scenes.transitions]]
+target = "任务系统"
+coords = [1663, 200]
+post_delay = 500
 
 
 
+[[scenes]]
+id = "任务系统"
+name = "任务系统"
+logic = "or"
 
+[scenes.anchors]
+text = [
+  { rect = [297, 60, 378, 96], val = "蹇季任务" },
+  { rect = [125, 50, 748, 115], val = "赛季等级赛季任务赛季历程赛季里程" },
+]
+color = [
+]
+
+# --- 动作步骤 ---
+[[scenes.transitions]]
+target = "赛季任务"
+coords = [337, 77]
+post_delay = 500
+
+
+[[scenes]]
+id = "赛季任务"
+name = "赛季任务"
+logic = "and"
+
+[scenes.anchors]
+text = [
+  { rect = [125, 114, 713, 157], val = "挑战目标" },
+]
+color = [
+]
+
+# --- 动作步骤 ---
+[[scenes.transitions]]
+target = "每日目标"
+coords = [352, 132]
+post_delay = 500
+
+[[scenes]]
+id = "每日目标"
+name = "每日目标"
 
 
 [[scenes]]

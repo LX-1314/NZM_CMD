@@ -25,3 +25,4 @@ windows = { version = "0.52", features = [
     "Foundation",
     "Foundation_Collections",  # <--- 必须加上这一行！
 ] }
+enigo = "0.6.1" # 用于软件模拟键鼠

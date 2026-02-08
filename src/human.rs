@@ -1,5 +1,5 @@
 // src/human.rs
-use crate::hardware::InputDevice; // 👈 路径变更
+use crate::hardware::InputDriver;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -7,14 +7,16 @@ use rand::Rng;
 use rand_distr::{Normal, Distribution};
 
 pub struct HumanDriver {
-    pub device: Arc<Mutex<InputDevice>>,
+    // ✨ 核心修改：使用 Box<dyn InputDriver> 来存储多态驱动
+    pub device: Arc<Mutex<Box<dyn InputDriver>>>,
     pub cur_x: f32,
     pub cur_y: f32,
 }
 
 impl HumanDriver {
     /// 初始化拟人化驱动器
-    pub fn new(device: Arc<Mutex<InputDevice>>, start_x: u16, start_y: u16) -> Self {
+    // ✨ 核心修改：参数类型同步更新
+    pub fn new(device: Arc<Mutex<Box<dyn InputDriver>>>, start_x: u16, start_y: u16) -> Self {
         Self {
             device,
             cur_x: start_x as f32,
@@ -138,8 +140,6 @@ impl HumanDriver {
             dev.mouse_up();
         }
     }
-
-// src/human.rs
 
     pub fn double_click_humanly(&mut self, left: bool, right: bool, interval_ms: u64) {
          self.click_humanly(left, right, 0);
