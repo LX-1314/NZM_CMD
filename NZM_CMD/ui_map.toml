@@ -1,0 +1,215 @@
+[[scenes]]
+id = "游戏大厅主界面"
+name = "游戏大厅主界面"
+logic = "and"
+
+[scenes.anchors]
+text = [
+  { rect = [1580, 882, 1762, 958], val = "选择玩法" },
+]
+color = [
+]
+
+# --- 跳转动作 ---
+[[scenes.transitions]]
+target = "大厅"
+coords = [194, 53]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "背包"
+coords = [335, 54]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "武器"
+coords = [473, 57]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "选择玩法"
+coords = [1672, 924]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "任务系统"
+coords = [1663, 200]
+post_delay = 500
+
+
+
+[[scenes]]
+id = "任务系统"
+name = "任务系统"
+logic = "or"
+
+[scenes.anchors]
+text = [
+  { rect = [297, 60, 378, 96], val = "蹇季任务" },
+  { rect = [125, 50, 748, 115], val = "赛季等级赛季任务赛季历程赛季里程" },
+]
+color = [
+]
+
+# --- 动作步骤 ---
+[[scenes.transitions]]
+target = "赛季任务"
+coords = [337, 77]
+post_delay = 500
+
+
+[[scenes]]
+id = "赛季任务"
+name = "赛季任务"
+logic = "and"
+
+[scenes.anchors]
+text = [
+  { rect = [125, 114, 713, 157], val = "挑战目标" },
+]
+color = [
+]
+
+# --- 动作步骤 ---
+[[scenes.transitions]]
+target = "每日目标"
+coords = [352, 132]
+post_delay = 500
+
+[[scenes]]
+id = "每日目标"
+name = "每日目标"
+handler = "daily"
+
+
+[[scenes]]
+id = "选择玩法"
+name = "选择玩法"
+logic = "and"
+
+[scenes.anchors]
+text = [
+  { rect = [107, 756, 241, 808], val = "僵尸猎场" },
+]
+color = [
+]
+
+# --- 跳转动作 ---
+[[scenes.transitions]]
+target = "僵尸猎场模式"
+coords = [227, 504]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "塔防模式"
+coords = [516, 506]
+post_delay = 1000
+
+
+[[scenes]]
+id = "塔防模式"
+name = "塔防模式"
+logic = "or"
+
+[scenes.anchors]
+text = [
+  { rect = [71, 186, 338, 273], val = "空间站" },
+  { rect = [58, 186, 433, 276], val = "20号星港" },
+]
+color = [
+]
+
+# --- 跳转动作 ---
+[[scenes.transitions]]
+target = "塔防地图选择"
+coords = [201, 235]
+post_delay = 1000
+
+
+[[scenes]]
+id = "塔防地图选择"
+name = "塔防地图选择"
+logic = "and"
+
+[scenes.anchors]
+text = [
+  { rect = [86, 502, 279, 569], val = "联盟大厦" },
+]
+color = [
+]
+
+# --- 动作步骤 ---
+[[scenes.transitions]]
+target = "联盟大厦地图"
+coords = [377, 349]
+post_delay = 500
+
+[[scenes.transitions]]
+target = "空间站地图"
+coords = [977, 354]
+post_delay = 500
+
+[[scenes.transitions]]
+target = "20号星港地图"
+coords = [1579, 350]
+post_delay = 500
+
+
+[[scenes]]
+id = "空间站地图"
+name = "空间站地图"
+logic = "and"
+
+[scenes.anchors]
+text = [
+  { rect = [71, 186, 338, 273], val = "空间站" },
+]
+color = [
+]
+
+# --- 跳转动作 ---
+[[scenes.transitions]]
+target = "空间站普通"
+coords = [1384, 294]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "空间站困难"
+coords = [1514, 294]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "空间站英雄"
+coords = [1644, 292]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "空间站炼狱"
+coords = [1773, 294]
+post_delay = 1000
+
+[[scenes.transitions]]
+target = "空间站开始"
+coords = [1713, 951]
+post_delay = 1000
+
+[[scenes]]
+id = "空间站炼狱"
+name = "空间站炼狱"
+handler = "td"
+
+[[scenes]]
+id = "空间站普通"
+name = "空间站普通"
+handler = "td"
+
+[[scenes]]
+id = "空间站英雄"
+name = "空间站英雄"
+handler = "td"
+
+
+
+
+
+

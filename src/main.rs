@@ -1,14 +1,14 @@
 // src/main.rs
+use clap::Parser;
+use nzm_cmd::daily_routine::DailyRoutineApp; // 引入日活模块
 use nzm_cmd::hardware::{create_driver, DriverType, InputDriver};
 use nzm_cmd::human::HumanDriver;
 use nzm_cmd::nav::{NavEngine, NavResult};
 use nzm_cmd::tower_defense::TowerDefenseApp;
-use nzm_cmd::daily_routine::DailyRoutineApp; // 引入日活模块
+use screenshots::Screen;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use clap::Parser;
-use screenshots::Screen; 
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -52,20 +52,22 @@ fn main() {
             create_driver(DriverType::Software, "", sw, sh).unwrap()
         }
     };
-    
+
     let driver_arc: Arc<Mutex<Box<dyn InputDriver>>> = Arc::new(Mutex::new(driver_box));
 
     let hb = Arc::clone(&driver_arc);
     thread::spawn(move || loop {
-        if let Ok(mut d) = hb.lock() { 
-            d.heartbeat(); 
+        if let Ok(mut d) = hb.lock() {
+            d.heartbeat();
         }
         thread::sleep(Duration::from_secs(1));
     });
 
-    let human_driver = Arc::new(Mutex::new(
-        HumanDriver::new(Arc::clone(&driver_arc), sw/2, sh/2)
-    ));
+    let human_driver = Arc::new(Mutex::new(HumanDriver::new(
+        Arc::clone(&driver_arc),
+        sw / 2,
+        sh / 2,
+    )));
 
     let engine = Arc::new(NavEngine::new("ui_map.toml", Arc::clone(&human_driver)));
 
@@ -76,9 +78,10 @@ fn main() {
             "input" => run_input_test(human_driver),
             "screen" => run_screen_test(),
             "ocr" => run_ocr_test(engine),
+            "scroll" => run_scroll_test(human_driver), // ✨ 新增这一行
             _ => println!("❌ 未知测试模式"),
         }
-        return; 
+        return;
     }
 
     println!("✅ 引擎就绪，5秒后开始自动化循环...");
@@ -86,14 +89,14 @@ fn main() {
 
     loop {
         println!("\n🔄 [主控] 正在导航至: {}...", args.target);
-        
+
         let nav_result = engine.navigate(&args.target);
 
         match nav_result {
             // ✨ 核心修改：接收 handler 参数
             NavResult::Handover(scene_id, handler_opt) => {
                 println!("⚔️ [主控] 导航成功: [{}]", scene_id);
-                
+
                 // 如果 TOML 里没配置 handler，默认 fallback 到 "td" (塔防)
                 // 这样兼容旧的配置文件
                 let handler_key = handler_opt.as_deref().unwrap_or("td");
@@ -101,14 +104,16 @@ fn main() {
                 match handler_key {
                     "daily" => {
                         println!("📅 [路由] 检测到 'daily' 标记，启动日活模块...");
-                        let app = DailyRoutineApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
+                        let app =
+                            DailyRoutineApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
                         app.run();
-                    },
-                    "td" | _ => { 
+                    }
+                    "td" | _ => {
                         // 默认处理逻辑 (塔防)
                         println!("🏰 [路由] 启动塔防模块 (Handler: {})...", handler_key);
-                        let mut td_app = TowerDefenseApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
-                        
+                        let mut td_app =
+                            TowerDefenseApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
+
                         let map_file = format!("{}地图.json", scene_id);
                         let strategy_file = format!("{}策略.json", scene_id);
                         let traps_file = "traps_config.json";
@@ -121,27 +126,27 @@ fn main() {
                 println!("🎉 本局任务结束，5秒后重新开始循环...");
                 thread::sleep(Duration::from_secs(5));
             }
-            
+
             NavResult::Failed => {
                 println!("❌ [主控] 导航失败，执行重置操作 (ESC)...");
-                
+
                 if let Ok(mut human) = human_driver.lock() {
                     // 使用 unicode 转义避免字符字面量错误
-                    human.key_hold('\u{1B}', 100); 
-                    
+                    human.key_hold('\u{1B}', 100);
+
                     if let Ok(mut dev) = human.device.lock() {
-                        dev.key_down(0x29, 0); 
+                        dev.key_down(0x29, 0);
                     }
                     thread::sleep(Duration::from_millis(100));
                     if let Ok(mut dev) = human.device.lock() {
-                        dev.key_up(); 
+                        dev.key_up();
                     }
                 }
-                
+
                 println!("⏳ 等待界面重置 (3秒)...");
                 thread::sleep(Duration::from_secs(3));
             }
-            
+
             NavResult::Success => {
                 println!("✅ [主控] 导航到达终点，等待重置...");
                 thread::sleep(Duration::from_secs(5));
@@ -177,15 +182,22 @@ fn run_screen_test() {
     println!("Testing Screen Capture...");
     let start = Instant::now();
     let screens = Screen::all().unwrap_or_default();
-    
+
     if let Some(screen) = screens.first() {
-        println!("-> 检测到屏幕: {}x{}", screen.display_info.width, screen.display_info.height);
+        println!(
+            "-> 检测到屏幕: {}x{}",
+            screen.display_info.width, screen.display_info.height
+        );
         match screen.capture() {
             Ok(image) => {
                 let path = "debug_screenshot.png";
                 image.save(path).unwrap();
-                println!("✅ 截图成功! 已保存至: {} (耗时 {}ms)", path, start.elapsed().as_millis());
-            },
+                println!(
+                    "✅ 截图成功! 已保存至: {} (耗时 {}ms)",
+                    path,
+                    start.elapsed().as_millis()
+                );
+            }
             Err(e) => println!("❌ 截图失败: {}", e),
         }
     } else {
@@ -195,17 +207,36 @@ fn run_screen_test() {
 
 fn run_ocr_test(engine: Arc<NavEngine>) {
     println!("Testing OCR Function...");
-    let rect = [100, 100, 500, 200]; 
+    let rect = [100, 100, 500, 200];
     println!("-> 正在识别区域: {:?}", rect);
     let start = Instant::now();
     let text = engine.ocr_area(rect);
-    
+
     println!("----------------------------------------");
     println!("⏱️ 耗时: {} ms", start.elapsed().as_millis());
     println!("📝 识别结果: [{}]", text);
     println!("----------------------------------------");
-    
+
     if text.is_empty() {
         println!("⚠️ 警告: 识别结果为空，请确认该区域有文字。");
     }
+}
+
+
+fn run_scroll_test(driver: Arc<Mutex<HumanDriver>>) {
+    println!("Testing Mouse Scroll...");
+    if let Ok(mut d) = driver.lock() {
+        println!("-> 向下滚动 5 格 (Scroll Down)");
+        // 负数通常是向下滚动
+        // 每次 -120 是一格 (标准 Windows 定义)，或者根据驱动实现可能是 -1
+        // 这里尝试传 -1 (因为 HardwareDriver 内部实现了累积，而 SoftwareDriver 调用 Enigo)
+        // 建议先试小数值，比如 -5 代表滚动5次
+        d.mouse_scroll(-5); 
+        
+        thread::sleep(Duration::from_secs(2));
+
+        println!("-> 向上滚动 5 格 (Scroll Up)");
+        d.mouse_scroll(5);
+    }
+    println!("Done.");
 }
