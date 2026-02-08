@@ -79,6 +79,7 @@ post_delay = 500
 [[scenes]]
 id = "每日目标"
 name = "每日目标"
+handler = "daily"
 
 
 [[scenes]]
@@ -195,14 +196,17 @@ post_delay = 1000
 [[scenes]]
 id = "空间站炼狱"
 name = "空间站炼狱"
+handler = "td"
 
 [[scenes]]
 id = "空间站普通"
 name = "空间站普通"
+handler = "td"
 
 [[scenes]]
 id = "空间站英雄"
 name = "空间站英雄"
+handler = "td"
 
 
 

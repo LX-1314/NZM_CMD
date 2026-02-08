@@ -1,9 +1,9 @@
 // src/main.rs
-// ✨ 1. 修改引用：移除 InputDevice，添加新的工厂函数和类型
 use nzm_cmd::hardware::{create_driver, DriverType, InputDriver};
 use nzm_cmd::human::HumanDriver;
 use nzm_cmd::nav::{NavEngine, NavResult};
 use nzm_cmd::tower_defense::TowerDefenseApp;
+use nzm_cmd::daily_routine::DailyRoutineApp; // 引入日活模块
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,15 +13,12 @@ use screenshots::Screen;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// 硬件串口名称 (例如: COM9, /dev/ttyUSB0)
     #[arg(short, long, default_value = "COM3")]
     port: String,
 
-    /// 导航目标界面名称 (例如: "空间站普通", "空间站炼狱")
     #[arg(short, long, default_value = "空间站普通")]
     target: String,
 
-    /// 运行测试模式 (可选: input, screen, ocr)
     #[arg(long)]
     test: Option<String>,
 }
@@ -39,17 +36,14 @@ fn main() {
     }
     println!("========================================");
 
-    // 1. 硬件驱动初始化
     let (sw, sh) = (1920, 1080);
 
-    // 根据传入的 port 判断是使用软件模拟还是硬件串口
     let driver_type = if args.port.to_uppercase() == "SOFT" {
         DriverType::Software
     } else {
         DriverType::Hardware
     };
 
-    // 创建驱动实例 (Box<dyn InputDriver>)
     let driver_box: Box<dyn InputDriver> = match create_driver(driver_type, &args.port, sw, sh) {
         Ok(d) => d,
         Err(e) => {
@@ -59,31 +53,22 @@ fn main() {
         }
     };
     
-    // ✨ 关键修改：显式标注 Arc 类型，帮助编译器通过编译
-    // 必须指明这是一个包含动态 Trait 对象的互斥锁
     let driver_arc: Arc<Mutex<Box<dyn InputDriver>>> = Arc::new(Mutex::new(driver_box));
 
-    // 启动心跳 (心跳线程)
     let hb = Arc::clone(&driver_arc);
     thread::spawn(move || loop {
-        // 获取锁并调用 Trait 方法
         if let Ok(mut d) = hb.lock() { 
             d.heartbeat(); 
         }
         thread::sleep(Duration::from_secs(1));
     });
 
-    // 2. 初始化驱动与引擎
-    // HumanDriver 的构造函数现在接受 Arc<Mutex<Box<dyn InputDriver>>>
     let human_driver = Arc::new(Mutex::new(
         HumanDriver::new(Arc::clone(&driver_arc), sw/2, sh/2)
     ));
 
     let engine = Arc::new(NavEngine::new("ui_map.toml", Arc::clone(&human_driver)));
 
-    // ==========================================
-    // 🔍 分发测试逻辑
-    // ==========================================
     if let Some(mode) = args.test.as_deref() {
         println!("⏳ 5秒后开始执行 [{}] 测试...", mode);
         thread::sleep(Duration::from_secs(5));
@@ -96,51 +81,56 @@ fn main() {
         return; 
     }
 
-    // ==========================================
-    // 🚀 正常业务流程
-    // ==========================================
     println!("✅ 引擎就绪，5秒后开始自动化循环...");
     thread::sleep(Duration::from_secs(5));
 
-    // 无限循环：导航 -> 塔防 -> 结束 -> 重来
     loop {
         println!("\n🔄 [主控] 正在导航至: {}...", args.target);
         
         let nav_result = engine.navigate(&args.target);
 
         match nav_result {
-            NavResult::Handover(scene_id) => {
-                println!("⚔️ [主控] 导航成功: [{}] -> 启动塔防逻辑", scene_id);
+            // ✨ 核心修改：接收 handler 参数
+            NavResult::Handover(scene_id, handler_opt) => {
+                println!("⚔️ [主控] 导航成功: [{}]", scene_id);
                 
-                // 初始化塔防 APP
-                let mut td_app = TowerDefenseApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
-                
-                // 动态生成文件名
-                let map_file = format!("{}地图.json", scene_id);
-                let strategy_file = format!("{}策略.json", scene_id);
-                let traps_file = "traps_config.json";
+                // 如果 TOML 里没配置 handler，默认 fallback 到 "td" (塔防)
+                // 这样兼容旧的配置文件
+                let handler_key = handler_opt.as_deref().unwrap_or("td");
 
-                println!("📂 加载配置: {} | {}", map_file, strategy_file);
+                match handler_key {
+                    "daily" => {
+                        println!("📅 [路由] 检测到 'daily' 标记，启动日活模块...");
+                        let app = DailyRoutineApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
+                        app.run();
+                    },
+                    "td" | _ => { 
+                        // 默认处理逻辑 (塔防)
+                        println!("🏰 [路由] 启动塔防模块 (Handler: {})...", handler_key);
+                        let mut td_app = TowerDefenseApp::new(Arc::clone(&human_driver), Arc::clone(&engine));
+                        
+                        let map_file = format!("{}地图.json", scene_id);
+                        let strategy_file = format!("{}策略.json", scene_id);
+                        let traps_file = "traps_config.json";
 
-                // 运行塔防逻辑 (阻塞直到游戏结束)
-                td_app.run(&map_file, &strategy_file, traps_file);
+                        println!("📂 加载配置: {} | {}", map_file, strategy_file);
+                        td_app.run(&map_file, &strategy_file, traps_file);
+                    }
+                }
 
-                println!("🎉 本局结束，5秒后重新开始循环...");
+                println!("🎉 本局任务结束，5秒后重新开始循环...");
                 thread::sleep(Duration::from_secs(5));
             }
             
             NavResult::Failed => {
                 println!("❌ [主控] 导航失败，执行重置操作 (ESC)...");
                 
-                // 尝试按下 ESC 关闭可能的弹窗
                 if let Ok(mut human) = human_driver.lock() {
-                    // 使用 key_click 封装即可，内部已处理 Box<dyn InputDriver>
-                    // 0x29 是 ESC
-                    human.key_hold('\u{1B}', 100); // 这里的字符映射可能需要检查，或者直接用底层
+                    // 使用 unicode 转义避免字符字面量错误
+                    human.key_hold('\u{1B}', 100); 
                     
-                    // 更保险的方式是直接调用 device (因为 0x29 是 HID 码，不是 char)
                     if let Ok(mut dev) = human.device.lock() {
-                        dev.key_down(0x29, 0); // Press ESC
+                        dev.key_down(0x29, 0); 
                     }
                     thread::sleep(Duration::from_millis(100));
                     if let Ok(mut dev) = human.device.lock() {
@@ -160,14 +150,10 @@ fn main() {
     }
 }
 
-// ----------------------------------------------------------------
-// 🛠️ 测试函数
-// ----------------------------------------------------------------
-
+// ... (测试函数 run_input_test, run_screen_test, run_ocr_test 保持不变) ...
 fn run_input_test(driver: Arc<Mutex<HumanDriver>>) {
     println!("Testing Mouse & Keyboard...");
     if let Ok(mut d) = driver.lock() {
-        // 1. 鼠标测试
         println!("-> 移动鼠标 (矩形轨迹)");
         let start_x = 500;
         let start_y = 500;
@@ -177,12 +163,10 @@ fn run_input_test(driver: Arc<Mutex<HumanDriver>>) {
         d.move_to_humanly(start_x, start_y + 300, 0.5);
         d.move_to_humanly(start_x, start_y, 0.5);
 
-        // 2. 点击测试
         println!("-> 执行点击 (Click)");
         d.click_humanly(true, false, 0);
         thread::sleep(Duration::from_millis(500));
 
-        // 3. 键盘测试
         println!("-> 模拟键盘输入 'hello 123'");
         d.type_humanly("hello 123", 60.0);
     }

@@ -22,7 +22,8 @@ use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
 #[derive(Debug, PartialEq)]
 pub enum NavResult {
     Success,
-    Handover(String),
+    // ✨ 修改：Handover 携带 (场景ID, 处理器代号)
+    Handover(String, Option<String>),
     Failed,
 }
 
@@ -38,6 +39,9 @@ struct Scene {
     #[serde(default)] logic: String,
     #[serde(default)] anchors: Option<Anchors>,
     #[serde(default)] transitions: Option<Vec<Transition>>,
+    // ✨ 新增：处理该界面的函数代号 (例如 "daily", "td")
+    #[serde(default)]
+    handler: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -161,27 +165,21 @@ impl GameInterface {
          // 3. 🔥 多重曝光 OCR 策略
          let mut results = Vec::new();
 
-         // 策略 A: 强二值化 (阈值 200) - 专门剥离 image_2dd778 中的背景斜线
+         // 策略 A: 强二值化 (阈值 200)
          let mut luma_high = scaled_img.grayscale().into_luma8();
          for pixel in luma_high.pixels_mut() { pixel[0] = if pixel[0] > 200 { 255 } else { 0 }; }
          results.push(self.run_windows_ocr(image::DynamicImage::ImageLuma8(luma_high)));
 
-         // 策略 B: 中等二值化 (阈值 140) - 针对 image_2e577c 这种较暗的场景
+         // 策略 B: 中等二值化 (阈值 140)
          let mut luma_mid = scaled_img.grayscale().into_luma8();
          for pixel in luma_mid.pixels_mut() { pixel[0] = if pixel[0] > 140 { 255 } else { 0 }; }
          results.push(self.run_windows_ocr(image::DynamicImage::ImageLuma8(luma_mid)));
 
-         // 策略 C: 原色缩放图 - 作为低对比度场景 (image_393c9e) 的兜底
+         // 策略 C: 原色缩放图
          results.push(self.run_windows_ocr(scaled_img.clone()));
 
          // 4. 合并所有识别到的文本块
          let final_text = results.join(" ");
-
-         /* // 📸 调试用：如需观察处理后的图像，取消下面代码注释
-         let count = self.screenshot_count.fetch_add(1, Ordering::SeqCst);
-         scaled_img.save(format!("debug_scaled_{}.png", count)).ok();
-         */
-
          final_text
     }
 
@@ -324,14 +322,23 @@ impl NavEngine {
         for (i, step) in path.iter().enumerate() {
             println!("\n➡️  [步骤 {}/{}] 点击 -> [{}]", i+1, path.len(), step.target);
             self.interface.perform_click(step.coords[0], step.coords[1]);
-            let is_virtual = if let Some(s) = self.scenes.get(&step.target) {
-                s.anchors.is_none()
-            } else { false };
-            if is_virtual {
-                println!("🚀 游戏入口，移交控制权！");
+            
+            // ✨ 核心修改：检查是否需要移交控制权
+            // 如果 TOML 里写了 handler = "xxx"，或者它是无锚点的虚拟节点，则移交
+            let (should_handover, handler_name) = if let Some(s) = self.scenes.get(&step.target) {
+                // 如果有 handler 字段，或者没有锚点，都视为需要移交
+                (s.handler.is_some() || s.anchors.is_none(), s.handler.clone())
+            } else { 
+                (false, None) 
+            };
+
+            if should_handover {
+                println!("🚀 到达托管节点 [{}]，触发处理器: {:?}", step.target, handler_name);
                 thread::sleep(Duration::from_millis(step.post_delay));
-                return NavResult::Handover(step.target.clone());
+                // 将 handler 名称一并返回给 main
+                return NavResult::Handover(step.target.clone(), handler_name);
             }
+
             let timeout = if step.post_delay < 2000 { 2000 } else { step.post_delay };
             if !self.wait_for_scene(&step.target, timeout) {
                 println!("❌ 导航中断: 未能进入 [{}]", step.target);
